@@ -1,13 +1,43 @@
 import streamlit as st
 import re #正则表示库
+import json
 from dotenv import load_dotenv
 from agent import initialize_agent
+
+from tools.chem_memory import collection, clear_memory
+
+import warnings
+import logging
+import os
+
+# 1. 屏蔽 HuggingFace Hub 和 Transformers 的内部扫描警告
+# 设置环境变量，直接禁用进度条和冗长日志
+os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+# 这一行是关键：将 Transformers 的日志等级设为 ERROR，不再输出 __path__ 等警告
+os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+
+# 2. 屏蔽 Python 层级的警告
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="langchain")
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="langgraph")
+warnings.filterwarnings("ignore", category=FutureWarning, module="transformers")
+warnings.filterwarnings("ignore", module="transformers")
+
+# 3. 全局降低日志等级
+logging.getLogger("streamlit.watcher.local_sources_watcher").setLevel(logging.ERROR)
+logging.getLogger("langchain").setLevel(logging.ERROR)
+logging.getLogger("langgraph").setLevel(logging.ERROR)
+logging.getLogger("chromadb").setLevel(logging.ERROR)
+logging.getLogger("sentence_transformers").setLevel(logging.ERROR)
+# 直接关闭 transformers 库的日志输出
+logging.getLogger("transformers").setLevel(logging.ERROR)
 
 st.set_page_config(
     page_title="ChemAssist App",
     page_icon="🧪",
     layout="centered",
 )
+
 
 @st.cache_resource
 def load_agent():
@@ -40,10 +70,16 @@ with st.sidebar:
         )
 
     st.divider()
+    st.metric("🧠 记忆库存储化学物质数量：", collection.count())
     st.markdown("**当前工具**: ChemSpiderTool")
     st.markdown("**核心模型**: DeepSeek-V4-flash")
     if st.button("🔄 清空对话"):
         st.session_state.messages = []
+
+    if st.button("🗑️ 清空记忆库"):
+        clear_memory()
+        st.success("记忆库已清空")
+        st.rerun()
 
 if "messages" not in st.session_state:
     st.session_state.messages = [
@@ -57,7 +93,7 @@ for msg in st.session_state.messages:
             with st.expander("🔍 查看原始化学数据 (JSON)"):
                 st.json(msg["raw_json"])
 
-prompt = st.chat_input("请输入化学物质名称...")
+prompt = st.chat_input("请输入化学物质名称...",key="main_chat_input")
 
 if prompt:
     # 添加用户消息
@@ -69,8 +105,8 @@ if prompt:
     with st.chat_message("assistant"):
         with st.spinner("正在查询 ChemSpider 数据库..."):
             try:
-                response = agent.invoke({"input": prompt}, return_intermediate_steps=True)
-                output = response.get("output", "")
+                response = agent.invoke({ "messages": [{"role": "user", "content": prompt}]},config={"configurable": {"thread_id": "chemassist-session-1"}})
+                output = response["messages"][-1].content
                 intermediate_steps = response.get("intermediate_steps", [])
                 thoughts = []
                 for step in intermediate_steps:
@@ -90,7 +126,6 @@ if prompt:
                 json_match = re.search(r'```json\s*({.*?})\s*```', output, re.DOTALL)
                 raw_json = None
                 if json_match:
-                    import json
                     try:
                         raw_json = json.loads(json_match.group(1))
                     except:

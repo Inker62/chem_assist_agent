@@ -7,6 +7,8 @@ from dotenv import load_dotenv
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
 
+from tools.chem_memory import add_to_memory
+
 
 load_dotenv()
 RSC_API_KEY = os.getenv("RSC_API_KEY")
@@ -86,12 +88,16 @@ class ChemSpiderTool(BaseTool):
         """执行ChemSPider查询并格式化返回结果"""
         try:
             data = search_compound_by_name(query)
+            #未查询到数据，返回提示信息
             if data is None:
                 return (
                     f"在 ChemSpider 中未找到名为 '{query}' 的化合物。"
                     f"请检查拼写，或尝试使用更标准的 IUPAC 名称。"
                 )
-
+            #查询到数据，先后执行缓存、传给LLM操作
+            print(f"即将存入记忆库，query={query}, data keys={list(data.keys())}")
+            add_to_memory(query, data)
+            print("存入成功")
             return json.dumps(data,indent=2,ensure_ascii=False)
         except requests.exceptions.HTTPError as e:
             return  f"API 请求失败 (HTTP 错误): {str(e)}"
