@@ -2,7 +2,7 @@ import streamlit as st
 import re #正则表示库
 import json
 from dotenv import load_dotenv
-from agent import initialize_agent
+from agents.agent import initialize_agent
 
 from tools.chem_memory import collection, clear_memory
 

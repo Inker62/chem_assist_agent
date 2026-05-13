@@ -19,16 +19,11 @@ ChemAssist 是一个由 AI 驱动的化学信息学助手，可以查询化学�
 2.  安装依赖：`pip install -r requirements.txt`
 3.  配置 API 密钥：将 `.env.example` 复制为 `.env` 并填入你的 Key
 4.  启动：`streamlit run app.py`
+### 备注：text_api.py是测试用debug脚本，非必要组件
 
+### 🚧 正在开发
+- 多智能体协同架构（`multiagent.py`），基于 LangGraph，待测试通过后合入主分支
 
-## 各依赖库作用：
-langchain	Agent 框架（create_openai_tools_agent, AgentExecutor）
-langchain-openai	LangChain 与 OpenAI 兼容模型的连接器（我们的 DeepSeek 通过它调用）
-langchain-community	LangChain 社区工具集（部分工具依赖此包）
-openai	OpenAI SDK（ChatOpenAI 底层依赖，实际发给 DeepSeek）
-pydantic	数据模型定义（BaseTool 的输入 schema ChemSpiderInput）
-python-dotenv	从 .env 文件加载环境变量
-requests	调用 RSC ChemSpider API
-streamlit	前端交互界面
-
-## 备注：text_api.py是测试用debug脚本，非必要组件
+## 外部API获取链接：
+- RSC ChemSpider:  'https://developer.rsc.org/'
+- PubMed: 'https://account.ncbi.nlm.nih.gov/'

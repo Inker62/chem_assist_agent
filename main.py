@@ -1,5 +1,5 @@
 from dotenv import load_dotenv
-from agent import initialize_agent
+from agents.agent import initialize_agent
 
 
 def main():
