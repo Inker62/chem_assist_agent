@@ -2,7 +2,6 @@ import os
 import operator
 from typing import TypedDict, Annotated, Sequence, List, Literal
 from dotenv import load_dotenv
-from pandas.core.methods import describe
 from pydantic import BaseModel, Field
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, ToolMessage
 from langchain_openai import ChatOpenAI
@@ -36,7 +35,7 @@ def create_supervisor_llm():
         temperature=0,
         openai_api_key=os.getenv("DEEPSEEK_API_KEY"),
         openai_api_base=BASE_URL,
-        extra_body={"thinking": {"type": "disabled"}}
+        #extra_body={"thinking": {"type": "disabled"}}
     )
 
 # 定义专家成员函数
@@ -63,16 +62,52 @@ literature_model = ChatOpenAI(
         extra_body={"thinking": {"type": "disabled"}}
     ).bind_tools(literature_tools)
 
-def chem_agent_node(state: MultiAgentState)-> dict:
-    """化学专家Agent节点：处理化学物质查询"""
-    response = chem_model.invoke(state["messages"])
+
+def chem_agent_node(state: MultiAgentState) -> dict:
+    # 强制标准化：只保留 HumanMessage, AIMessage, ToolMessage
+    clean = []
+    for m in state["messages"]:
+        if isinstance(m, HumanMessage):
+            clean.append(HumanMessage(content=m.content))
+        elif isinstance(m, AIMessage):
+            # 保留 AIMessage，但可在此处做清洗
+            clean.append(AIMessage(content=m.content, id=m.id))
+        elif isinstance(m, ToolMessage):
+            clean.append(ToolMessage(content=m.content, tool_call_id=m.tool_call_id, name=m.name))
+
+    # 如果没有有效消息，返回错误提示
+    if not clean:
+        return {"messages": [AIMessage(content="错误：未收到有效查询。")], "next": END}
+
+    # 注入化学专家身份
+    system_msg = HumanMessage(content="你是化学信息学专家，使用工具查询物质结构数据。")
+    messages = [system_msg] + clean
+
+    response = chem_model.invoke(messages)
     if response.tool_calls:
         return {"messages": [response], "next": "chem_tools"}
     return {"messages": [response], "next": "supervisor"}
 
+
 def literature_agent_node(state: MultiAgentState) -> dict:
-    """文献专家Agent节点：处理学术文献查询"""
-    response = literature_model.invoke(state["messages"])
+    # 强制标准化
+    clean = []
+    for m in state["messages"]:
+        if isinstance(m, HumanMessage):
+            clean.append(HumanMessage(content=m.content))
+        elif isinstance(m, AIMessage):
+            clean.append(AIMessage(content=m.content, id=m.id))
+        elif isinstance(m, ToolMessage):
+            clean.append(ToolMessage(content=m.content, tool_call_id=m.tool_call_id, name=m.name))
+
+    if not clean:
+        return {"messages": [AIMessage(content="错误：未收到有效查询。")], "next": END}
+
+    # 注入文献专家身份
+    system_msg = HumanMessage(content="你是文献检索专家，使用工具获取学术论文信息。")
+    messages = [system_msg] + clean
+
+    response = literature_model.invoke(messages)
     if response.tool_calls:
         return {"messages": [response], "next": "literature_tools"}
     return {"messages": [response], "next": "supervisor"}
@@ -80,29 +115,49 @@ def literature_agent_node(state: MultiAgentState) -> dict:
 supervisor_llm = create_supervisor_llm()
 structured_supervisor = supervisor_llm.with_structured_output(SupervisorDecision)
 
-def supervisor_node(state: MultiAgentState) -> dict:
-    """主管专家Agent节点：分析用户意图，并分派任务给合适的专家Agent"""
-    system_prompt = (
-        "你是ChemAssist的主管智能体。你的任务是根据用户的请求，将任务分派给合适的专家Agent。\n"
-        "你可以调用以下两个专家Agent。\n"
-        "1.'chem_agent':根据用户输入查询化学物质的结构与性质。\n"
-        "2.'literature_agent':根据用户输入的关键词查询相关研究文献。\n"
-        "如果你判断需要化学专家，请回复 `chem_agent`。如果需要文献专家，请回复 `literature_agent`。如果需要两者，请回复 `both`。如果问题已经解决，返回 'finish'。"
-    )
 
-    messages = [{"role": "system", "content": system_prompt}] + list(state["messages"])
+def supervisor_node(state: MultiAgentState) -> dict:
+    # 强制标准化
+    clean = []
+    for m in state["messages"]:
+        if isinstance(m, HumanMessage):
+            clean.append(HumanMessage(content=m.content))
+        elif isinstance(m, AIMessage):
+            clean.append(AIMessage(content=m.content, id=m.id))
+        elif isinstance(m, ToolMessage):
+            clean.append(ToolMessage(content=m.content, tool_call_id=m.tool_call_id, name=m.name))
+
+    system_prompt = (
+        "你是 ChemAssist 的主管。你的唯一职责是根据用户请求，决定调用哪个专家。\n"
+        "可选决策：\n"
+        "- chem_agent：查询化学物质的结构、性质\n"
+        "- literature_agent：检索学术文献\n"
+        "- both：需要同时查询化学和文献（会先化学后文献）\n"
+        "- finish：任务已由专家完成，需要你生成一个最终回复\n\n"
+        "请只返回决策键，不要添加任何额外文字。"
+    )
+    messages = [HumanMessage(content=system_prompt)] + clean
 
     try:
-        decision: SupervisorDecision = structured_supervisor.invoke(messages)
+        decision = structured_supervisor.invoke(messages)
     except Exception:
-        return {"next": "finish"}
+        return {"next": END}
 
     if decision.next == "both":
         return {"next": "chem_agent"}
     elif decision.next == "finish":
-        return {"next": END}
-    else:
+        # 任务完成，主管自己生成最终回复
+        try:
+            final_response = supervisor_llm.invoke(clean)
+            return {"messages": [final_response], "next": END}
+        except Exception:
+            # LLM调用失败时的兜底
+            return {"messages": [AIMessage(content="抱歉，处理过程中遇到错误，请稍后重试。")], "next": END}
+    elif decision.next in ("chem_agent", "literature_agent"):
         return {"next": decision.next}
+    else:
+        return {"next": END}
+
 
 # 构建Graph
 def build_workflow():
@@ -120,18 +175,19 @@ def build_workflow():
     workflow.add_edge(START, "supervisor")
 
     # 从主管到专家的调度
-    workflow.add_conditional_edge(
+    workflow.add_conditional_edges(
         "supervisor",
         lambda x: x["next"],
         {
             "chem_agent": "chem_agent",
             "literature_agent": "literature_agent",
+            "finish": END,
             END: END
         }
     )
 
     # 从专家到工具&从工具返回专家
-    workflow.add_conditional_edge(
+    workflow.add_conditional_edges(
         "chem_agent",
         lambda x: x["next"],
         {
@@ -140,7 +196,7 @@ def build_workflow():
     )
     workflow.add_edge("chem_tools", "chem_agent")
 
-    workflow.add_conditional_edge(
+    workflow.add_conditional_edges(
         "literature_agent",
         lambda x: x["next"],
         {

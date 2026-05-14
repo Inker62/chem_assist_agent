@@ -3,7 +3,8 @@ import re #正则表示库
 import json
 from dotenv import load_dotenv
 from agents.agent import initialize_agent
-
+from agents.multiagent import initialize_multiagent
+from langchain_core.messages import HumanMessage, AIMessage
 from tools.chem_memory import collection, clear_memory
 
 import warnings
@@ -44,7 +45,10 @@ def load_agent():
     load_dotenv()
     return initialize_agent()
 
-agent = load_agent()
+@st.cache_resource
+def load_multiagent():
+    load_dotenv()
+    return initialize_multiagent()
 
 st.title("🧪 ChemAssist App")
 st.caption("Powered by DeepSeek & RSC ChemSpider · 化学助手智能体")
@@ -68,6 +72,30 @@ with st.sidebar:
             file_name="ChemAssist_conversation.md",
             mime="text/markdown"
         )
+
+    st.markdown("## ⚙ 运行模式选择")
+    mode_config = {
+        "single_agent": "标准模式，调用单Agent完成化学物质/文献查询",
+        "multi_agent": "多Agent协同模式，调用MultiAgent完成化学物质检索及关联文献检索功能"
+    }
+
+    selected_mode = st.selectbox(
+        "选择ChemAssist的工作模式",
+        options=list(mode_config.keys()),
+        format_func=lambda x: mode_config[x],
+        key="agent_mode"
+    )
+
+    agent_loaders={
+        "single_agent": load_agent,
+        "multi_agent": load_multiagent,
+    }
+
+    agent = agent_loaders.get(selected_mode, load_agent)()
+
+    st.caption(f"当前模式：{mode_config[selected_mode]}")
+
+
 
     st.divider()
     st.metric("🧠 记忆库存储化学物质数量：", collection.count())
@@ -105,8 +133,57 @@ if prompt:
     with st.chat_message("assistant"):
         with st.spinner("正在查询 ChemSpider 数据库..."):
             try:
-                response = agent.invoke({ "messages": [{"role": "user", "content": prompt}]},config={"configurable": {"thread_id": "chemassist-session-1"}})
-                output = response["messages"][-1].content
+
+                # 清洗历史消息
+                cleaned_messages = []
+                for msg in st.session_state.messages:
+                    if isinstance(msg, dict):
+                        if msg.get("role") == "user":
+                            cleaned_messages.append(HumanMessage(content=msg["content"]))
+                        elif msg.get("role") == "assistant":
+                            cleaned_messages.append(AIMessage(content=msg["content"]))
+                    elif isinstance(msg, (HumanMessage, AIMessage)):
+                        cleaned_messages.append(msg)
+
+                # 添加当前用户输入
+                cleaned_messages.append(HumanMessage(content=prompt))
+
+                response = agent.invoke({ "messages": [HumanMessage(content=prompt)]},config={"configurable": {"thread_id": "chemassist-session-1"}})
+
+                print([(type(m).__name__, getattr(m, 'content', str(m)[:100])) for m in response["messages"]])
+            # 临时诊断：显示所有消息的类型和内容片段
+                debug_info = []
+                for i, msg in enumerate(response["messages"]):
+                    msg_type = type(msg).__name__
+                    content_preview = getattr(msg, 'content', str(msg))[:200]
+                    debug_info.append(f"**{i + 1}. [{msg_type}]** {content_preview}")
+
+                st.markdown("### 🧠 消息流诊断\n" + "\n\n".join(debug_info))
+
+                # 然后继续我们原有的安全提取，以便在修复后正常工作
+                output = None
+                for msg in reversed(response["messages"]):
+                    if isinstance(msg, AIMessage) and msg.content:
+                        output = msg.content
+                        break
+                if output is None:
+                    output = "⚠️ 未生成有效回复，详见上方诊断。"
+
+
+
+                #output = None
+                #for msg in reversed(response["messages"]):
+                #    if isinstance(msg, AIMessage) and msg.content:
+                #        output = msg.content
+                #        break
+
+                # 如果找不到任何 AIMessage，显示诊断信息（而不是复读）
+                #if output is None:
+                    # 终端打印全貌，方便你排查
+                #    print([(type(m).__name__, getattr(m, 'content', str(m)[:100])) for m in response["messages"]])
+                #    output = "⚠️ 多智能体未生成有效回复，请检查终端日志。"
+
+
                 intermediate_steps = response.get("intermediate_steps", [])
                 thoughts = []
                 for step in intermediate_steps:
@@ -138,7 +215,7 @@ if prompt:
 
                 # 显示最终文本回答（可能包含提取后的部分，但保留原样）
                 st.markdown(output)
-                
+
             except Exception as e:
                 output = f"⚠️ 查询出错: {str(e)}"
                 st.error(output)
