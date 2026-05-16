@@ -20,15 +20,34 @@ collection = client.get_or_create_collection(
     metadata={"hnsw:space":"cosine"}
 ) #从客户端读取/若无则新建'chemical_cache'的集合，并指定向量检索相似度为余弦距离
 
-def add_to_memory(query:str, response_josn:dict):
-    """将查询词和API返回的JSON存入向量库"""
-    doc_str = json.dumps(response_josn, ensure_ascii=False) #将python字典序列化为JSON字符串，保证非ASCII字符不被转义
-    embedding = embedder.encode(query).tolist() #嵌入模型转化用户查询文本为向量，tolist方法将其转化为python列表
+def add_to_memory(query:str, response_json:dict):
+    """将查询词和 API 返回的 JSON 存入向量库，使用规范名称或 ChemSpider ID 作为键"""
+    # 使用 ChemSpider 返回的通用名或 ID 作为存储键，避免同义词重复存储
+    compound_id = response_json.get("id")
+    common_name = response_json.get("commonName", query).strip()
+
+    # 优先使用 ChemSpider ID 作为唯一键，如果没有则回退到通用名
+    if compound_id:
+        store_key = f"csid_{compound_id}"
+    else:
+        # 简单标准化：去除多余空格、转为小写
+        store_key = common_name.lower().strip()
+
+    doc_str = json.dumps(response_json, ensure_ascii=False)
+    embedding = embedder.encode(common_name).tolist()  # 使用通用名生成向量，方便语义检索
+
+    # 先检查是否已存在该键，存在则更新（合并信息），否则新增
+    existing = collection.get(ids=[store_key])
+    if existing and existing["ids"]:
+        print(f"记忆库已存在记录 {store_key}，将更新。")
+    else:
+        print(f"记忆库新增记录 {store_key}。")
+
     collection.upsert(
-        documents=[doc_str], #API返回的JSON字符串
-        embeddings=[embedding], #对应查询向量
-        metadatas=[{"query": query}], #元数据，对应至用户原始查询词
-        ids=[query] #唯一标识符
+        documents=[doc_str],
+        embeddings=[embedding],
+        metadatas=[{"query": query, "commonName": common_name}],
+        ids=[store_key]
     )
 
 def search_memory(query: str, top_k: int = 1) -> Optional[str]: #top_k为1，返回最相似的缓存JSON字符串
