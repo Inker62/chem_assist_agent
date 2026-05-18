@@ -1,5 +1,6 @@
-# 环境变量
+# 环境变量&本地配置
 .env
+.claude
 
 # Python 虚拟环境
 venv/

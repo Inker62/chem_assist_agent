@@ -40,11 +40,11 @@ class CrossrefSearchTool(BaseTool):
             for item in data.get("message", {}).get("items", []):
                 authors = item.get("author", [])
                 results.append({
-                    "title": item.get("title", ["N/A"])[0],
+                    "title": (item.get("title") or ["N/A"])[0],
                     "authors": [a.get("family", "N/A") for a in authors],
-                    "journal": item.get("container-title", ["N/A"])[0] or "N/A",
-                    "year": item.get("issued", {}).get("date-parts", [[0]])[0][0],
-                    "doi": item.get("DOI", "N/A"),
+                    "journal": (item.get("container-title") or ["N/A"])[0] or "N/A",
+                    "year": (item.get("issued", {}).get("date-parts") or [[0]])[0][0],
+                    "doi": item.get("DOI") or "N/A",
                     "citation_count": item.get("is-referenced-by-count", 0)
                 })
 
