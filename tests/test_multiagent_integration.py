@@ -137,3 +137,31 @@ def test_max_rounds_guard_stops_execution(mock_all_llms):
     assert len(messages) > 0
     error_texts = [m.content for m in messages if isinstance(m, AIMessage) and "超时" in str(m.content)]
     assert len(error_texts) > 0
+
+
+def test_both_parallel_dispatch(mock_all_llms):
+    """Supervisor decides both -> parallel chem + lit -> summary -> END"""
+    m = mock_all_llms
+    m.decision.invoke.return_value = MagicMock(content='{"next": "both"}')
+    m.chem.invoke.return_value = AIMessage(content="Aspirin: SMILES=CC(=O)Oc1ccccc1C(=O)O, MW=180.16")
+    m.lit.invoke.return_value = AIMessage(content="Found 5 papers on Aspirin synthesis after 2020")
+    m.summary.invoke.return_value = AIMessage(content="## Aspirin\n\nChem info + 5 literature references")
+
+    from agents.multiagent import initialize_multiagent
+    app = initialize_multiagent()
+
+    result = app.invoke(
+        {"messages": [HumanMessage(content="Aspirin industrial synthesis, 5 papers after 2020")]},
+        config={"configurable": {"thread_id": "test-both-1"}}
+    )
+
+    messages = result.get("messages", [])
+    assert len(messages) > 0
+    # 两个专家都应该被调用
+    m.chem.invoke.assert_called()
+    m.lit.invoke.assert_called()
+    # summary 应该生成最终回复
+    m.summary.invoke.assert_called()
+    # 最终回复应包含内容
+    final_ai = [m for m in messages if isinstance(m, AIMessage) and "Aspirin" in str(m.content)]
+    assert len(final_ai) > 0

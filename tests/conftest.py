@@ -21,6 +21,9 @@ from unittest.mock import MagicMock
 os.environ['DEEPSEEK_API_KEY'] = 'test-deepseek-key'
 os.environ['RSC_API_KEY'] = 'test-rsc-key'
 os.environ['PUBMED_EMAIL'] = 'test@example.com'
+os.environ['CHEMASSIST_TEST_DB'] = os.path.join(
+    os.path.dirname(__file__), '..', 'local_data', 'test_checkpoints.db'
+)
 
 # ============================================================
 # STEP 2: Fake ChromaDB 集合 和 SentenceTransformer

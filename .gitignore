@@ -17,6 +17,7 @@ __pycache__/
 
 # 本地数据（模型缓存 + 向量数据库）
 local_data/
+docs/.doc.txt
 
 # PubMed查询功能
 tools/PubMed.py

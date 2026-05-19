@@ -1,17 +1,20 @@
 import os
 import json
+import logging
 from typing import Optional, Type
 import chromadb
 from sentence_transformers import SentenceTransformer
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
 
+logger = logging.getLogger(__name__)
+
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "local_data")
 CACHE_DIR = os.path.join(DATA_DIR, "model_cache") #持久存储向量库
 PERSIST_DIR = os.path.join(DATA_DIR, "chemical_memory_db") #模型缓存地址
 os.makedirs(CACHE_DIR, exist_ok=True)  # 确保目录存在
 #加载'all-MiniLM-L6-v2'本地模型，轻量化，生产384维向量
-embedder = SentenceTransformer('all-MiniLM-L6-v2',cache_folder=CACHE_DIR)
+embedder = SentenceTransformer('all-MiniLM-L6-v2', cache_folder=CACHE_DIR, local_files_only=True)
 #初始化chroma数据库实例，在磁盘上持久化一个客户端，存入指定路径
 client = chromadb.PersistentClient(path=PERSIST_DIR)
 
@@ -39,9 +42,9 @@ def add_to_memory(query:str, response_json:dict):
     # 先检查是否已存在该键，存在则更新（合并信息），否则新增
     existing = collection.get(ids=[store_key])
     if existing and existing["ids"]:
-        print(f"记忆库已存在记录 {store_key}，将更新。")
+        logger.info("记忆库已存在记录 %s，将更新。", store_key)
     else:
-        print(f"记忆库新增记录 {store_key}。")
+        logger.info("记忆库新增记录 %s。", store_key)
 
     collection.upsert(
         documents=[doc_str],

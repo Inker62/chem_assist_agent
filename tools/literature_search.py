@@ -1,14 +1,10 @@
 import requests
-import os
 from typing import Type
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
-from dotenv import load_dotenv
 import json
 
-load_dotenv()
-CROSSREF_BASE_URL = "https://api.crossref.org/works/"
-REQUEST_TIMEOUT = 15
+from config import CROSSREF_BASE_URL, CROSSREF_TIMEOUT, PUBMED_EMAIL
 
 class CrossrefSearchInput(BaseModel):
     query: str = Field(description="CrossRef 检索关键词，支持引文标题、作者或 DOI")
@@ -30,9 +26,9 @@ class CrossrefSearchTool(BaseTool):
             params = {
                 "query": query,
                 "rows": max_results,
-                "mailto": os.getenv("PUBMED_EMAIL", "user@example.com")
+                "mailto": PUBMED_EMAIL
             }
-            resp = requests.get(CROSSREF_BASE_URL, params=params, timeout=REQUEST_TIMEOUT)
+            resp = requests.get(CROSSREF_BASE_URL, params=params, timeout=CROSSREF_TIMEOUT)
             resp.raise_for_status()
             data = resp.json()
 

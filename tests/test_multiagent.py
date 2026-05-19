@@ -2,7 +2,6 @@
 import pytest
 from unittest.mock import MagicMock
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
-from langgraph.types import Send
 from langgraph.graph import END
 
 
@@ -84,18 +83,14 @@ class TestSupervisorNode:
         result = mam.supervisor_node(_make_state("请查询AIE相关文献"))
         assert result["next"] == "literature_agent"
 
-    def test_decides_both_returns_send_list(self, mocker):
+    def test_decides_both_returns_route_key(self, mocker):
         from agents import multiagent as mam
         _mock_llm(mocker, 'agents.multiagent.decision_llm',
                   MagicMock(content='{"next": "both"}'))
         result = mam.supervisor_node(_make_state("甲基丙烯酸甲酯的化学结构和相关文献"))
-        assert isinstance(result, list)
-        assert len(result) == 2
-        assert isinstance(result[0], Send)
-        assert isinstance(result[1], Send)
-        assert result[0].node == "chem_agent"
-        assert result[1].node == "literature_agent"
-        assert result[0].arg["round_count"] == 1
+        assert isinstance(result, dict)
+        assert result["next"] == "both"
+        assert result["round_count"] == 1
 
     def test_decides_finish_calls_summary_llm(self, mocker):
         from agents import multiagent as mam

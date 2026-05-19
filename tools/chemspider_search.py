@@ -1,18 +1,16 @@
 import os
 import time
+import logging
 from typing import Optional, Type, Dict, Any
 import json
 import requests
-from dotenv import load_dotenv
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
 
+from config import RSC_API_KEY, RSC_BASE_URL
 from tools.chem_memory import add_to_memory
 
-
-load_dotenv()
-RSC_API_KEY = os.getenv("RSC_API_KEY")
-BASE_URL = "https://api.rsc.org/compounds/v1"
+logger = logging.getLogger(__name__)
 
 def search_compound_by_name(compound_name: str) -> Optional[Dict[str, Any]]:
     """
@@ -23,7 +21,7 @@ def search_compound_by_name(compound_name: str) -> Optional[Dict[str, Any]]:
     """
     headers = {"apikey": RSC_API_KEY,"Content-Type":"application/json","Accept":"application/json"}
 
-    search_url = f"{BASE_URL}/filter/name"
+    search_url = f"{RSC_BASE_URL}/filter/name"
     search_resp = requests.post(search_url, json={"name":compound_name}, headers=headers)
     #print("DEBUG: name search response:", search_resp.text)
     search_resp.raise_for_status()
@@ -31,7 +29,7 @@ def search_compound_by_name(compound_name: str) -> Optional[Dict[str, Any]]:
     if not query_id:
         return None
 
-    status_url = f"{BASE_URL}/filter/{query_id}/status"
+    status_url = f"{RSC_BASE_URL}/filter/{query_id}/status"
     max_retries = 15
     for i in range(max_retries):
         time.sleep(3)
@@ -44,7 +42,7 @@ def search_compound_by_name(compound_name: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-    results_url = f"{BASE_URL}/filter/{query_id}/results"
+    results_url = f"{RSC_BASE_URL}/filter/{query_id}/results"
     results_resp = requests.get(results_url, headers=headers)
     results_resp.raise_for_status()
     results=results_resp.json().get("results",[])
@@ -59,7 +57,7 @@ def search_compound_by_name(compound_name: str) -> Optional[Dict[str, Any]]:
     else:
         return None
 
-    detail_url = f"{BASE_URL}/records/{compound_id}/details"
+    detail_url = f"{RSC_BASE_URL}/records/{compound_id}/details"
     fields = "SMILES, Formula, InChI, InChIKey, StdInChI, StdInChIKey, AverageMass, MolecularWeight, MonoisotopicMass, NominalMass, CommonName, ReferenceCount, DataSourceCount, PubMedCount, RSCCount, Mol2D, Mol3D"
     detail_resp = requests.get(detail_url, headers=headers, params={"fields":fields})
     detail_resp.raise_for_status()
@@ -95,9 +93,9 @@ class ChemSpiderTool(BaseTool):
                     f"请检查拼写，或尝试使用更标准的 IUPAC 名称。"
                 )
             #查询到数据，先后执行缓存、传给LLM操作
-            print(f"即将存入记忆库，query={query}, data keys={list(data.keys())}")
+            logger.debug("即将存入记忆库，query=%s, data keys=%s", query, list(data.keys()))
             add_to_memory(query, data)
-            print("存入成功")
+            logger.info("存入成功，query=%s", query)
             return json.dumps(data,indent=2,ensure_ascii=False)
         except requests.exceptions.HTTPError as e:
             return  f"API 请求失败 (HTTP 错误): {str(e)}"
