@@ -31,6 +31,7 @@ decision_llm = ChatOpenAI(
 summary_llm = ChatOpenAI(
     model=DEEPSEEK_MODEL,
     temperature=0,
+    streaming=True,
     openai_api_key=DEEPSEEK_API_KEY,
     openai_api_base=DEEPSEEK_BASE_URL,
     extra_body={"thinking": {"type": "disabled"}}

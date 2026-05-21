@@ -14,6 +14,13 @@ def _get_mam():
     return _mam
 
 
+def _stream_summary(llm, messages):
+    """MagicMock -> invoke; real LLM (streaming=True) -> invoke, LangGraph auto-captures token chunks"""
+    if type(llm).__module__ == 'unittest.mock':
+        return llm.invoke(messages)
+    return llm.invoke(messages)
+
+
 def _clean_messages(messages: list) -> list:
     """只保留 HumanMessage 和不带 tool_calls 的 AIMessage，供最终总结使用"""
     clean = []
@@ -122,7 +129,7 @@ def supervisor_node(state: MultiAgentState) -> dict:
         return {"next": "both", "round_count": round_count + 1, "both_active": True}
     elif decision == "finish":
         try:
-            final = _get_mam().summary_llm.invoke(clean_history)
+            final = _stream_summary(_get_mam().summary_llm, clean_history)
             logger.debug("主管回复: %s", final.content[:100])
             return {"messages": [final], "next": END}
         except Exception as e:
@@ -168,7 +175,7 @@ def summary_node(state: MultiAgentState) -> dict:
     format_instruction = HumanMessage(content="请根据上面的对话生成最终回复。如果需要整理文献表格，请输出表格。如果只是化学查询，请总结化学信息。")
     messages = clean_history + [format_instruction]
     try:
-        final = _get_mam().summary_llm.invoke(messages)
+        final = _stream_summary(_get_mam().summary_llm, messages)
         logger.debug("最终回复: %s", final.content[:100])
         return {"messages": [final]}
     except Exception as e:

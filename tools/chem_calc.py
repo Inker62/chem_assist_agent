@@ -81,3 +81,20 @@ class ChemCalcTool(BaseTool):
                 result["image_path"] = image_path
 
         return json.dumps(result, indent=2, ensure_ascii=False)
+
+
+def extract_mol_images(messages: list) -> list:
+    """从消息列表中提取 ChemCalc 生成的 2D 结构图路径，返回 [(path, smiles), ...]"""
+    import json as _json
+    images = []
+    for msg in messages:
+        if hasattr(msg, 'content') and isinstance(msg.content, str):
+            try:
+                data = _json.loads(msg.content)
+                if isinstance(data, dict) and "image_path" in data:
+                    img_path = data["image_path"]
+                    if os.path.exists(img_path):
+                        images.append((img_path, data.get("smiles", "")))
+            except (_json.JSONDecodeError, TypeError):
+                pass
+    return images

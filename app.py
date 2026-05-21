@@ -7,7 +7,8 @@ import config
 from agents.agent import initialize_agent
 from agents.multiagent import initialize_multiagent
 from tools.chem_memory import collection, clear_memory
-from langchain_core.messages import HumanMessage, AIMessage
+from tools.chem_calc import extract_mol_images
+from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 
 import warnings
 import logging
@@ -27,7 +28,6 @@ logging.getLogger("chromadb").setLevel(logging.ERROR)
 logging.getLogger("sentence_transformers").setLevel(logging.ERROR)
 logging.getLogger("transformers").setLevel(logging.ERROR)
 
-# ==================== 页面配置 ====================
 st.set_page_config(
     page_title="ChemAssist 化学智能助手",
     page_icon="🧪",
@@ -35,10 +35,8 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ==================== 自定义样式 ====================
 st.markdown("""
 <style>
-    /* 主标题 */
     .main-header {
         background: linear-gradient(135deg, #1a5276 0%, #2e86c1 50%, #3498db 100%);
         padding: 1.8rem 2rem;
@@ -57,8 +55,6 @@ st.markdown("""
         opacity: 0.85;
         font-size: 0.9rem;
     }
-
-    /* 侧边栏 */
     section[data-testid="stSidebar"] .stMarkdown h2 {
         color: #2e86c1;
         font-size: 1.1rem;
@@ -69,8 +65,6 @@ st.markdown("""
     section[data-testid="stSidebar"] .stMarkdown h2:first-child {
         margin-top: 0;
     }
-
-    /* 按钮 */
     .stButton button {
         border-radius: 8px;
         font-weight: 500;
@@ -80,16 +74,12 @@ st.markdown("""
         transform: translateY(-1px);
         box-shadow: 0 4px 8px rgba(0,0,0,0.15);
     }
-
-    /* 指标卡片 */
     [data-testid="stMetric"] {
         background: linear-gradient(135deg, #ebf5fb 0%, #d6eaf8 100%);
         padding: 1rem;
         border-radius: 10px;
         border: 1px solid #aed6f1;
     }
-
-    /* 聊天输入 */
     [data-testid="stChatInput"] textarea {
         border-radius: 12px !important;
         border: 2px solid #d6eaf8 !important;
@@ -98,26 +88,19 @@ st.markdown("""
         border-color: #2e86c1 !important;
         box-shadow: 0 0 0 2px rgba(46,134,193,0.2) !important;
     }
-
-    /* 进度提示 */
     .stAlert {
         border-radius: 8px;
     }
-
-    /* 展开面板 */
     .streamlit-expanderHeader {
         font-size: 0.85rem;
         color: #7f8c8d;
     }
-
-    /* 响应式 */
     @media (max-width: 768px) {
         .main-header h1 { font-size: 1.4rem; }
     }
 </style>
 """, unsafe_allow_html=True)
 
-# ==================== 头部 ====================
 st.markdown("""
 <div class="main-header">
     <h1>🧪 ChemAssist 化学智能助手</h1>
@@ -125,16 +108,17 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# ==================== Agent 缓存 ====================
+
 @st.cache_resource
 def load_agent():
     return initialize_agent()
+
 
 @st.cache_resource
 def load_multiagent():
     return initialize_multiagent()
 
-# ==================== 侧边栏 ====================
+
 with st.sidebar:
     st.markdown("## 📖 使用说明")
     st.markdown("""
@@ -198,7 +182,6 @@ with st.sidebar:
             st.success("记忆库已清空")
             st.rerun()
 
-# ==================== 初始化消息历史 ====================
 if "messages" not in st.session_state:
     st.session_state.messages = [
         {
@@ -208,13 +191,13 @@ if "messages" not in st.session_state:
                 "我可以帮你：\n"
                 "- 🔬 查询化学物质的结构信息（SMILES、分子量、InChIKey 等）\n"
                 "- 📚 检索学术文献（通过 CrossRef）\n"
+                "- 🖼️ 生成分子 2D 结构图（通过 RDKit ChemCalc）\n"
                 "- 🤖 多 Agent 协同模式下自动判断查询类型\n\n"
                 "请在下方输入框开始提问吧！"
             ),
         }
     ]
 
-# ==================== 渲染历史消息 ====================
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
@@ -222,7 +205,6 @@ for msg in st.session_state.messages:
             with st.expander("🔍 查看原始化学数据 (JSON)"):
                 st.json(msg["raw_json"])
 
-# ==================== 用户输入 ====================
 prompt = st.chat_input("请输入化学物质名称或文献检索关键词...")
 
 if prompt:
@@ -251,27 +233,50 @@ if prompt:
             for item in agent.stream(
                 {"messages": [HumanMessage(content=prompt)]},
                 config={"configurable": {"thread_id": str(uuid.uuid4())}},
-                stream_mode="updates",
+                stream_mode=["updates", "messages"]
             ):
-                if isinstance(item, dict):
+                if isinstance(item, tuple):
+                    if len(item) == 3:
+                        namespace, mode, data = item
+                        node_name = namespace[0] if isinstance(namespace, tuple) else str(namespace)
+                    else:
+                        mode, data = item
+                        node_name = ""
+
+                    if mode == "updates":
+                        if node_name:
+                            status = progress_labels.get(node_name, node_name)
+                            progress_placeholder.info(status)
+                        if isinstance(data, dict):
+                            for node_output in data.values():
+                                if isinstance(node_output, dict) and "messages" in node_output:
+                                    all_messages.extend(node_output["messages"])
+
+                    elif mode == "messages":
+                        if isinstance(data, tuple) and len(data) >= 1:
+                            chunk = data[0]
+                            token = getattr(chunk, 'content', '') or ''
+                            if token:
+                                full_response += token
+                                response_container.markdown(full_response + "▌")
+
+                elif isinstance(item, dict):
                     for node_name, node_output in item.items():
-                        status = progress_labels.get(node_name, f"⏳ {node_name}")
+                        status = progress_labels.get(node_name, node_name)
                         progress_placeholder.info(status)
                         if isinstance(node_output, dict) and "messages" in node_output:
                             all_messages.extend(node_output["messages"])
 
             progress_placeholder.empty()
 
-            # 提取最终回复
             if not full_response:
                 for msg in reversed(all_messages):
                     if isinstance(msg, AIMessage) and msg.content:
                         full_response = msg.content
                         break
             if not full_response:
-                full_response = "⚠️ 未生成有效回复，请重试。"
+                full_response = "No valid response generated."
 
-            # 提取内嵌 JSON
             json_match = re.search(r'```json\s*({.*?})\s*```', full_response, re.DOTALL)
             if json_match:
                 try:
@@ -281,16 +286,22 @@ if prompt:
 
             response_container.markdown(full_response)
 
-            # 消息流诊断面板
+            # 展示 RDKit 生成的 2D 结构图
+            mol_images = extract_mol_images(all_messages)
+            if mol_images:
+                st.divider()
+                for img_path, smiles in mol_images:
+                    caption = f"2D Structure: {smiles}" if smiles else "2D Structure"
+                    st.image(img_path, caption=caption, use_container_width=True)
+
             with st.expander("🧠 消息流诊断"):
-                st.caption(f"共 {len(all_messages)} 条消息")
                 for i, msg in enumerate(all_messages):
                     msg_type = type(msg).__name__
                     preview = getattr(msg, 'content', str(msg))[:200]
                     st.text(f"{i+1}. [{msg_type}] {preview}")
 
         except Exception as e:
-            full_response = f"⚠️ 查询出错：{str(e)}"
+            full_response = f"Error: {str(e)}"
             st.error(full_response)
             all_messages = []
             progress_placeholder.empty()
