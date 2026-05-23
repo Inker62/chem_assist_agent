@@ -94,9 +94,11 @@ class ChemSpiderTool(BaseTool):
                 )
             #查询到数据，先后执行缓存、传给LLM操作
             logger.debug("即将存入记忆库，query=%s, data keys=%s", query, list(data.keys()))
-            add_to_memory(query, data)
+            add_to_memory(query, data)  # 完整数据存入知识库（含 mol2D/mol3D 供后续 3D 渲染）
             logger.info("存入成功，query=%s", query)
-            return json.dumps(data,indent=2,ensure_ascii=False)
+            # 剥掉 mol2D/mol3D 再传给 LLM——坐标数据对推理无意义且污染上下文
+            llm_data = {k: v for k, v in data.items() if k not in ("mol2D", "mol3D")}
+            return json.dumps(llm_data, indent=2, ensure_ascii=False)
         except requests.exceptions.HTTPError as e:
             return  f"API 请求失败 (HTTP 错误): {str(e)}"
         except Exception as e:

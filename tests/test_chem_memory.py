@@ -57,17 +57,19 @@ class TestAddToMemory:
 class TestSearchMemory:
     """search_memory 函数的各种场景"""
 
-    def test_returns_none_when_collection_empty(self, reset_memory):
+    def test_returns_empty_list_when_collection_empty(self, reset_memory):
         from tools.chem_memory import search_memory
-        assert search_memory("aspirin") is None
+        assert search_memory("aspirin") == []
 
-    def test_returns_json_string_when_found(self, reset_memory, sample_compound_json):
+    def test_returns_hit_list_when_found(self, reset_memory, sample_compound_json):
         from tools.chem_memory import add_to_memory, search_memory
         add_to_memory("aspirin", sample_compound_json)
         result = search_memory("aspirin")
-        assert result is not None
-        parsed = json.loads(result)
+        assert len(result) > 0
+        doc_str, score, meta = result[0]
+        parsed = json.loads(doc_str)
         assert parsed["id"] == 2157
+        assert 0 <= score <= 1
 
 
 class TestClearMemory:
@@ -91,19 +93,85 @@ class TestChemicalMemoryTool:
         add_to_memory("aspirin", sample_compound_json)
         tool = ChemicalMemoryTool()
         result = tool._run("aspirin")
-        assert "2157" in result
         parsed = json.loads(result)
-        assert parsed["commonName"] == "Aspirin"
+        assert parsed["status"] == "hit"
+        assert parsed["count"] >= 1
+        assert parsed["results"][0]["commonName"] == "Aspirin"
 
-    def test_run_returns_not_found_when_missing(self, reset_memory):
+    def test_run_returns_miss_when_not_found(self, reset_memory):
         from tools.chem_memory import ChemicalMemoryTool
         tool = ChemicalMemoryTool()
         result = tool._run("nonexistent_compound")
-        assert result == "Not Found"
+        parsed = json.loads(result)
+        assert parsed["status"] == "miss"
+        assert parsed["results"] == []
 
     def test_tool_metadata_is_correct(self, reset_memory):
         from tools.chem_memory import ChemicalMemoryTool
         tool = ChemicalMemoryTool()
         assert tool.name == "ChemicalMemory"
-        assert "ChemSpider" in tool.description
+        assert "知识库" in tool.description
         assert tool.args_schema is not None
+
+
+class TestListEntries:
+    """知识库浏览器相关"""
+
+    def test_empty_returns_empty_list(self, reset_memory):
+        from tools.chem_memory import list_entries
+        assert list_entries() == []
+
+    def test_returns_all_entries(self, reset_memory, sample_compound_json):
+        from tools.chem_memory import add_to_memory, list_entries
+        add_to_memory("aspirin", sample_compound_json)
+        entries = list_entries()
+        assert len(entries) == 1
+        assert entries[0]["id"] == "csid_2157"
+        assert "created_at" in entries[0]
+        assert "last_accessed" in entries[0]
+
+
+class TestDeleteEntry:
+    def test_delete_single_entry(self, reset_memory, sample_compound_json):
+        from tools.chem_memory import add_to_memory, delete_entry, list_entries
+        add_to_memory("aspirin", sample_compound_json)
+        assert len(list_entries()) == 1
+        delete_entry("csid_2157")
+        assert len(list_entries()) == 0
+
+    def test_delete_nonexistent_does_not_raise(self, reset_memory):
+        from tools.chem_memory import delete_entry
+        delete_entry("no_such_id")  # 不应抛异常
+
+
+class TestGetStats:
+    def test_empty_stats(self, reset_memory):
+        from tools.chem_memory import get_stats
+        stats = get_stats()
+        assert stats["total"] == 0
+
+    def test_stats_with_entries(self, reset_memory, sample_compound_json):
+        from tools.chem_memory import add_to_memory, get_stats
+        add_to_memory("aspirin", sample_compound_json)
+        stats = get_stats()
+        assert stats["total"] == 1
+        assert stats["newest"] is not None
+        assert "capacity_pct" in stats
+
+
+class TestSearchThreshold:
+    """相似度阈值过滤"""
+
+    def test_high_threshold_filters_results(self, reset_memory):
+        """存入 'aspirin'，设置阈值 0.99 → 即使相关匹配也被过滤"""
+        from tools.chem_memory import add_to_memory, search_memory
+        add_to_memory("aspirin", {"commonName": "Aspirin", "id": 2157})
+        hits = search_memory("aspirin", threshold=0.99)
+        assert hits == []  # 极高门槛，伪嵌入向量达不到
+
+    def test_relaxed_threshold_returns_matches(self, reset_memory):
+        """存入 'aspirin'，用相同词 + 低阈值搜索 → 应命中"""
+        from tools.chem_memory import add_to_memory, search_memory
+        add_to_memory("aspirin", {"commonName": "Aspirin", "id": 2157})
+        hits = search_memory("aspirin", threshold=0.1)
+        assert len(hits) > 0

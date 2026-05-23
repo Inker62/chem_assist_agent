@@ -144,7 +144,14 @@ def supervisor_node(state: MultiAgentState) -> dict:
 def chem_agent_node(state: MultiAgentState) -> dict:
     logger.debug("chem_agent_node 被调用")
     safe_messages = _ensure_tool_pairs(list(state["messages"]))
-    messages = [HumanMessage(content="你是化学信息学专家，使用工具查询物质结构数据。")] + safe_messages
+    messages = [HumanMessage(content=(
+        "你是化学信息学专家，使用工具查询物质结构数据。遵循以下流程：\n"
+        "1. 先调用 ChemicalMemory 检查知识库中是否已有该化合物。\n"
+        "2. 如未命中，调用 ChemSpiderSearch（按名称）或 PubChemSearch（按 SMILES）获取化合物数据。\n"
+        "3. 获得 SMILES 后，必须调用 ChemCalc 计算分子描述符并生成 2D 结构图。\n"
+        "4. 如有结构分析需求，调用 StructureAnnotator 识别官能团、手性中心和核心骨架。\n"
+        "重要：拿到 SMILES 就立刻调用 ChemCalc，不要等用户要求。"
+    ))] + safe_messages
     response = _get_mam().chem_model.invoke(messages)
     if response.tool_calls:
         logger.debug("化学专家调用工具: %s", [tc['name'] for tc in response.tool_calls])
@@ -172,7 +179,14 @@ def literature_agent_node(state: MultiAgentState) -> dict:
 def summary_node(state: MultiAgentState) -> dict:
     logger.debug("summary_node 被调用")
     clean_history = _clean_messages(state["messages"])
-    format_instruction = HumanMessage(content="请根据上面的对话生成最终回复。如果需要整理文献表格，请输出表格。如果只是化学查询，请总结化学信息。")
+    format_instruction = HumanMessage(content=(
+        "请根据上面的对话生成最终回复。严格遵循以下规则：\n"
+        "1. 如果对话中有化合物的 SMILES 结构式，必须调用 ChemCalc 工具生成 2D 结构图。\n"
+        "2. 如果需要整理文献表格，请输出 Markdown 表格。\n"
+        "3. 如果是化学查询，请总结关键化学信息（名称、分子式、分子量、SMILES）。\n"
+        "4. 如果用户绘制了分子结构，优先展示结构分析结果。\n"
+        "5. 回复末尾主动询问用户是否需要进一步的分析（如官能团标注、结构比较）。"
+    ))
     messages = clean_history + [format_instruction]
     try:
         final = _stream_summary(_get_mam().summary_llm, messages)

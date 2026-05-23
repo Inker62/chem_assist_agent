@@ -8,10 +8,7 @@ from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import ToolNode
 
 from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
-from tools.chemspider_search import ChemSpiderTool
-from tools.chem_memory import ChemicalMemoryTool
-from tools.chem_calc import ChemCalcTool
-from tools.literature_search import CrossrefSearchTool
+from tools import CHEM_TOOLS, LITERATURE_TOOLS
 
 logger = logging.getLogger(__name__)
 
@@ -37,8 +34,8 @@ summary_llm = ChatOpenAI(
     extra_body={"thinking": {"type": "disabled"}}
 )
 
-chem_tools = [ChemSpiderTool(), ChemicalMemoryTool(), ChemCalcTool()]
-literature_tools = [CrossrefSearchTool()]
+chem_tools = CHEM_TOOLS
+literature_tools = LITERATURE_TOOLS
 
 chem_tool_node = ToolNode(chem_tools)
 literature_tool_node = ToolNode(literature_tools)

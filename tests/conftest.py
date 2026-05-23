@@ -85,12 +85,27 @@ class FakeCollection:
 
     def query(self, query_embeddings, n_results=1):
         if not self._docs:
-            return {"documents": [[]], "metadatas": [[]], "ids": [[]]}
-        keys = self._ids_order[:n_results]
+            return {"documents": [[]], "metadatas": [[]], "ids": [[]], "distances": [[]]}
+        import math
+        query_vec = query_embeddings[0]
+        scores = []
+        for key in self._ids_order:
+            stored_vec = self._embeddings.get(key, [0] * len(query_vec))
+            dot = sum(a * b for a, b in zip(query_vec, stored_vec))
+            norm_q = math.sqrt(sum(a * a for a in query_vec))
+            norm_s = math.sqrt(sum(b * b for b in stored_vec))
+            if norm_q == 0 or norm_s == 0:
+                similarity = 0.0
+            else:
+                similarity = dot / (norm_q * norm_s)
+            scores.append((key, similarity))
+        scores.sort(key=lambda x: x[1], reverse=True)
+        top = scores[:n_results]
         return {
-            "documents": [[self._docs[k] for k in keys]],
-            "metadatas": [[self._metadatas.get(k) for k in keys]],
-            "ids": [[k for k in keys]],
+            "documents": [[self._docs[k] for k, _ in top]],
+            "metadatas": [[self._metadatas.get(k) for k, _ in top]],
+            "ids": [[k for k, _ in top]],
+            "distances": [[round(1.0 - s, 4) for _, s in top]],
         }
 
     def upsert(self, documents, embeddings, metadatas, ids):
@@ -100,6 +115,11 @@ class FakeCollection:
             self._docs[id_] = documents[i]
             self._embeddings[id_] = embeddings[i]
             self._metadatas[id_] = metadatas[i]
+
+    def update(self, ids, metadatas):
+        for i, id_ in enumerate(ids):
+            if id_ in self._docs:
+                self._metadatas[id_] = metadatas[i] if i < len(metadatas) else metadatas[0]
 
     def delete(self, ids):
         for id_ in ids:

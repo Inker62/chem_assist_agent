@@ -6,9 +6,29 @@ import uuid
 import config
 from agents.agent import initialize_agent
 from agents.multiagent import initialize_multiagent
-from tools.chem_memory import collection, clear_memory
+from tools.chem_memory import collection, clear_memory, list_entries, delete_entry, get_stats
 from tools.chem_calc import extract_mol_images
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
+from streamlit_ketcher import st_ketcher
+
+
+def _strip_molfile(text: str) -> str:
+    """移除 Molfile V2000/V3000 坐标块（数百行原子坐标对用户无意义）
+
+    Molfile 特征：以 'V2000' 或 'V3000' 开头行，以 'M  END' 结尾
+    """
+    # 匹配从 V2000/V3000 行到 M  END 的所有内容（含前后换行）
+    text = re.sub(
+        r'\n\s+\d+\s+\d+\s+[\s\d]*V[23]000.*?M\s+END\s*\n',
+        '\n[2D/3D 结构坐标数据已存入知识库]\n',
+        text, flags=re.DOTALL
+    )
+    # 清理残留的 PUBCHEM_BONDANNOTATIONS 等注释块
+    text = re.sub(
+        r'\n> <PUBCHEM_\w+>.*?\n\n\$\$\$\$\n',
+        '', text, flags=re.DOTALL
+    )
+    return text
 
 import warnings
 import logging
@@ -95,6 +115,23 @@ st.markdown("""
         font-size: 0.85rem;
         color: #7f8c8d;
     }
+    /* Ketcher 绘图面板样式 */
+    [data-testid="stExpander"] details summary {
+        border: 2px dashed #aed6f1;
+        border-radius: 10px;
+        padding: 0.6rem 1rem;
+        background: linear-gradient(135deg, #f0f8ff 0%, #e8f4fd 100%);
+        transition: all 0.2s;
+    }
+    [data-testid="stExpander"] details summary:hover {
+        border-color: #2e86c1;
+        background: linear-gradient(135deg, #d6eaf8 0%, #c5e0f5 100%);
+    }
+    /* Ketcher iframe 容器 */
+    iframe[title="streamlit_ketcher\\.streamlit_ketcher"] {
+        border: 1px solid #d6eaf8;
+        border-radius: 8px;
+    }
     @media (max-width: 768px) {
         .main-header h1 { font-size: 1.4rem; }
     }
@@ -143,8 +180,8 @@ with st.sidebar:
 
     st.markdown("## ⚙️ 运行模式")
     mode_config = {
-        "single_agent": "🔹 标准模式 — 单 Agent 化学/文献查询",
         "multi_agent": "🔹 协同模式 — 多 Agent 并行检索 + 文献",
+        "single_agent": "🔹 标准模式 — 单 Agent 化学/文献查询",
     }
 
     selected_mode = st.selectbox(
@@ -162,13 +199,49 @@ with st.sidebar:
     agent = agent_loaders.get(selected_mode, load_agent)()
 
     st.markdown("## 📊 系统状态")
-    col1, col2 = st.columns(2)
+    stats = get_stats()
+    col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric("记忆库条目", collection.count())
+        st.metric("知识库条目", stats["total"])
     with col2:
-        st.metric("当前模式", "单Agent" if selected_mode == "single_agent" else "多Agent")
+        st.metric("累计命中", stats.get("total_accesses", 0))
+    with col3:
+        st.metric("容量使用", f"{stats.get('capacity_pct', 0)}%")
 
-    st.caption(f"模型：DeepSeek-V4-flash | 工具：ChemSpider + CrossRef + ChemCalc (RDKit)")
+    st.caption(f"模型：DeepSeek-V4-flash | 工具：ChemSpider + CrossRef + RDKit")
+
+    # ---- 知识库浏览器 ----
+    st.markdown("## 📚 个人知识库")
+    entries = list_entries()
+    if entries:
+        kb_filter = st.text_input("🔍 筛选知识库", key="kb_filter", placeholder="输入名称或 SMILES 筛选...")
+        filtered = entries
+        if kb_filter:
+            filt_lower = kb_filter.lower()
+            filtered = [
+                e for e in entries
+                if filt_lower in e["commonName"].lower()
+                or filt_lower in e["query"].lower()
+                or filt_lower in str(e.get("smiles", "")).lower()
+            ]
+        st.caption(f"共 {len(entries)} 条，显示 {len(filtered)} 条")
+        for entry in filtered[:20]:  # 最多显示 20 条，避免侧边栏过长
+            with st.container():
+                c1, c2 = st.columns([5, 1])
+                with c1:
+                    name = entry["commonName"] or entry["query"] or entry["id"]
+                    smiles = entry.get("smiles", "")
+                    created = entry.get("created_at", "")[:10]
+                    st.markdown(f"**{name}**  ")
+                    if smiles:
+                        st.caption(f"`{smiles}`")
+                    st.caption(f"📅 {created} · 🔍 {entry['access_count']}次")
+                with c2:
+                    if st.button("🗑️", key=f"del_{entry['id']}", help=f"删除 {name}"):
+                        delete_entry(entry["id"])
+                        st.rerun()
+    else:
+        st.caption("知识库为空，查询化学物质后会自动积累。")
 
     st.markdown("## 🛠️ 管理")
     c1, c2 = st.columns(2)
@@ -182,6 +255,23 @@ with st.sidebar:
             st.success("记忆库已清空")
             st.rerun()
 
+# ==================== Ketcher 分子结构绘制 ====================
+with st.expander("🎨 分子结构绘制（点击展开，绘制分子后点击 Apply 确认）", expanded=False):
+    ketcher_smiles = st_ketcher(
+        value=st.session_state.get("ketcher_smiles", ""),
+        height=400,
+        key="ketcher_editor"
+    )
+    if ketcher_smiles:
+        st.session_state["ketcher_smiles"] = ketcher_smiles
+        st.info(f"✅ 当前分子 SMILES: `{ketcher_smiles}`")
+    else:
+        st.session_state["ketcher_smiles"] = ""
+    st.caption(
+        "1. 在画布上绘制分子结构 → 2. 点击 **Apply** 确认 → "
+        "3. 在下方输入框中输入问题（如\"识别官能团\"、\"计算分子量\"等）→ 4. 回车发送"
+    )
+
 if "messages" not in st.session_state:
     st.session_state.messages = [
         {
@@ -192,8 +282,9 @@ if "messages" not in st.session_state:
                 "- 🔬 查询化学物质的结构信息（SMILES、分子量、InChIKey 等）\n"
                 "- 📚 检索学术文献（通过 CrossRef）\n"
                 "- 🖼️ 生成分子 2D 结构图（通过 RDKit ChemCalc）\n"
+                "- 🎨 手绘分子结构并智能分析（点击上方展开绘图面板）\n"
                 "- 🤖 多 Agent 协同模式下自动判断查询类型\n\n"
-                "请在下方输入框开始提问吧！"
+                "请在下方输入框开始提问，或先在上方绘制分子结构！"
             ),
         }
     ]
@@ -205,12 +296,20 @@ for msg in st.session_state.messages:
             with st.expander("🔍 查看原始化学数据 (JSON)"):
                 st.json(msg["raw_json"])
 
-prompt = st.chat_input("请输入化学物质名称或文献检索关键词...")
+prompt = st.chat_input("输入问题，或先在上方绘制分子结构...")
 
 if prompt:
-    st.session_state.messages.append({"role": "user", "content": prompt})
+    ketcher_smiles = st.session_state.get("ketcher_smiles", "")
+    if ketcher_smiles:
+        agent_prompt = f"SMILES: {ketcher_smiles}\n\n用户问题: {prompt}"
+        display_msg = f"🧬 分子: `{ketcher_smiles}`\n\n{prompt}"
+    else:
+        agent_prompt = prompt
+        display_msg = prompt
+
+    st.session_state.messages.append({"role": "user", "content": display_msg})
     with st.chat_message("user"):
-        st.markdown(prompt)
+        st.markdown(display_msg)
 
     with st.chat_message("assistant"):
         progress_placeholder = st.empty()
@@ -231,7 +330,7 @@ if prompt:
 
         try:
             for item in agent.stream(
-                {"messages": [HumanMessage(content=prompt)]},
+                {"messages": [HumanMessage(content=agent_prompt)]},
                 config={"configurable": {"thread_id": str(uuid.uuid4())}},
                 stream_mode=["updates", "messages"]
             ):
@@ -258,7 +357,10 @@ if prompt:
                             token = getattr(chunk, 'content', '') or ''
                             if token:
                                 full_response += token
-                                response_container.markdown(full_response + "▌")
+                                # 实时过滤 Molfile 坐标数据，避免满屏 V2000 糊脸
+                                response_container.markdown(
+                                    _strip_molfile(full_response) + "▌"
+                                )
 
                 elif isinstance(item, dict):
                     for node_name, node_output in item.items():
@@ -284,7 +386,7 @@ if prompt:
                 except json.JSONDecodeError:
                     pass
 
-            response_container.markdown(full_response)
+            response_container.markdown(_strip_molfile(full_response))
 
             # 展示 RDKit 生成的 2D 结构图
             mol_images = extract_mol_images(all_messages)
